@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Retro NHL Hockey</title>
+<style>
+canvas { background:#0d3d0d; display:block; margin:0 auto; }
+body { text-align:center; color:white; font-family:sans-serif; }
+</style>
+</head>
+<body>
+<h1>Retro NHL Hockey</h1>
+<p>Arrow keys to move, Spacebar to shoot</p>
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+<script>
+// ===== CANVAS SETUP =====
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// ===== GAME VARIABLES =====
+let puck = { x:400, y:300, vx:0, vy:0, radius:10 };
+let playerTeam=[], cpuTeam=[];
+let currentPlayerLine=0, currentCpuLine=0, shiftTimer=0;
+let period=1, periodTime=0;
+let score={player:0, cpu:0};
+
+// ===== SEASON VARIABLES =====
+const teams = ["Blue","Red","Green","Yellow"];
+let seasonSchedule=[], currentGameIndex=0, playoffTeams=[];
+let allTeams = {}; // persistent stats & wins
+
+// ===== HELPERS =====
+function shuffleArray(arr){
+    for(let i=arr.length-1;i>0;i--){
+        const j=Math.floor(Math.random()*(i+1));
+        [arr[i],arr[j]]=[arr[j],arr[i]];
+    }
+}
+
+// ===== PLAYER CREATION =====
+function createPlayer(x,y,role,color,name,line){
+    return {
+        x,y,vx:0,vy:0,speed:2,role,color,hasPuck:false,
+        targetX:x,targetY:y,fatigue:0,
+        name:name||"Player", goals:0, assists:0, games:0,
+        line:line||0, team:""
+    };
+}
+
+// ===== TEAM CREATION =====
+function createTeam(name,color){
+    let team=[];
+    // 3 forwards
+    for(let i=0;i<3;i++) team.push(createPlayer(200+i*50,150+i*50,"forward",color,`F${i+1}`,0));
+    // 2 defense
+    for(let i=0;i<2;i++) team.push(createPlayer(100,250+i*100,"defense",color,`D${i+1}`,0));
+    // 1 goalie
+    team.push(createPlayer(50,300,"goalie",color,"G",0));
+    team.forEach(p=>p.team=name);
+    return team;
+}
+
+// ===== SETUP TEAMS =====
+teams.forEach(t=> allTeams[t] = createTeam(t,t.toLowerCase()) );
+
+// ===== SEASON SCHEDULE =====
+function generateSeasonSchedule(){
+    seasonSchedule=[];
+    for(let i=0;i<teams.length;i++){
+        for(let j=0;j<teams.length;j++){
+            if(i!==j) seasonSchedule.push({home:teams[i],away:teams[j]});
+        }
+    }
+    shuffleArray(seasonSchedule);
+}
+
+// ===== LOAD NEXT GAME =====
+function loadNextGame(){
+    if(currentGameIndex>=seasonSchedule.length){
+        startPlayoffs();
+        return;
+    }
+    const matchup = seasonSchedule[currentGameIndex];
+    playerTeam = JSON.parse(JSON.stringify(allTeams[matchup.home]));
+    cpuTeam = JSON.parse(JSON.stringify(allTeams[matchup.away]));
+    currentGameIndex++;
+    score={player:0,cpu:0};
+    period=1; periodTime=0;
+}
+
+// ===== LINE CHANGES & FATIGUE =====
+function handleLineChanges(){
+    shiftTimer += 1/60;
+    if(shiftTimer>=30){
+        shiftTimer=0;
+        currentPlayerLine = (currentPlayerLine+1)%1; // extendable
+        currentCpuLine = (currentCpuLine+1)%1;
+    }
+}
+
+function updateFatigue(team){
+    team.forEach(p=>{
+        if(p.role!=="goalie"){
+            p.fatigue+=0.02;
+            p.speed=Math.max(1,2 - p.fatigue/50);
+        }
+    });
+}
+
+// ===== PUCK MECHANICS =====
+function updatePuck(){
+    puck.x += puck.vx;
+    puck.y += puck.vy;
+    puck.vx *= 0.99;
+    puck.vy *= 0.99;
+}
+
+// ===== CPU AI =====
+function updateCPU(team){
+    team.forEach(p=>{
+        if(p.role==="goalie") return;
+        let dx = puck.x - p.x;
+        let dy = puck.y - p.y;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+        p.targetX = p.x + dx/dist*p.speed;
+        p.targetY = p.y + dy/dist*p.speed;
+    });
+}
+
+// ===== MOVE PLAYERS =====
+function moveToTargets(team){
+    team.forEach(p=>{
+        p.x += (p.targetX - p.x)*0.1;
+        p.y += (p.targetY - p.y)*0.1;
+    });
+}
+
+// ===== PLAYER INPUT =====
+document.addEventListener('keydown', e=>{
+    const p = playerTeam[0]; // control first forward
+    if(e.key==='ArrowUp') p.targetY -= p.speed*5;
+    if(e.key==='ArrowDown') p.targetY += p.speed*5;
+    if(e.key==='ArrowLeft') p.targetX -= p.speed*5;
+    if(e.key==='ArrowRight') p.targetX += p.speed*5;
+    if(e.key===' ') shootPuck(p);
+});
+
+// ===== SHOOT PUCK =====
+function shootPuck(player){
+    if(Math.abs(player.x - puck.x)<20 && Math.abs(player.y - puck.y)<20){
+        puck.vx = (Math.random()*4+4)*(player.team==="Blue"?1:-1);
+        puck.vy = (Math.random()*4-2);
+    }
+}
+
+// ===== CHECK GOALS =====
+function checkGoal(){
+    if(puck.x<0 && puck.y>250 && puck.y<350){
+        score.cpu++;
+        resetFaceoff();
+    }
+    if(puck.x>800 && puck.y>250 && puck.y<350){
+        score.player++;
+        resetFaceoff();
+    }
+}
+
+// ===== FACEOFF =====
+function resetFaceoff(){
+    puck.x=400; puck.y=300; puck.vx=0; puck.vy=0;
+}
+
+// ===== END GAME =====
+function endGame(){
+    if(score.player>score.cpu) allTeams[playerTeam[0].team].wins=(allTeams[playerTeam[0].team].wins||0)+1;
+    else allTeams[cpuTeam[0].team].wins=(allTeams[cpuTeam[0].team].wins||0)+1;
+
+    playerTeam.forEach(p=>{ p.games++; if(Math.random()<0.1) p.goals++; });
+    cpuTeam.forEach(p=>{ p.games++; if(Math.random()<0.1) p.goals++; });
+
+    loadNextGame();
+}
+
+// ===== PLAYOFFS =====
+function startPlayoffs(){
+    playoffTeams = teams.sort((a,b)=>(allTeams[b].wins||0)-(allTeams[a].wins||0)).slice(0,2);
+    alert(`Playoffs Start: ${playoffTeams[0]} vs ${playoffTeams[1]}`);
+    playerTeam = JSON.parse(JSON.stringify(allTeams[playoffTeams[0]]));
+    cpuTeam = JSON.parse(JSON.stringify(allTeams[playoffTeams[1]]));
+}
+
+// ===== RENDER GAME =====
+function renderGame(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle="#0d3d0d"; ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    ctx.fillStyle="black";
+    ctx.beginPath(); ctx.arc(puck.x,puck.y,puck.radius,0,Math.PI*2); ctx.fill();
+
+    function drawTeam(team){
+        team.forEach(p=>{
+            ctx.fillStyle=p.color;
+            ctx.beginPath(); ctx.arc(p.x,p.y,15,0,Math.PI*2); ctx.fill();
+        });
+    }
+    drawTeam(playerTeam);
+    drawTeam(cpuTeam);
+
+    ctx.fillStyle="white";
+    ctx.fillText(`Score: Player ${score.player} - CPU ${score.cpu}`,350,20);
+    ctx.fillText(`Period: ${period}`,370,40);
+    let standings = teams.map(t=>`${t}: ${(allTeams[t].wins||0)}W`).join(" | ");
+    ctx.fillText(`Standings: ${standings}`,150,60);
+}
+
+// ===== GAME LOOP =====
+function gameLoop(){
+    handleLineChanges();
+    updateFatigue(playerTeam);
+    updateFatigue(cpuTeam);
+    updatePuck();
+    updateCPU(cpuTeam);
+    moveToTargets(playerTeam);
+    moveToTargets(cpuTeam);
+    checkGoal();
+    renderGame();
+
+    periodTime+=1/60;
+    if(periodTime>=60*10){
+        period++;
+        periodTime=0;
+        resetFaceoff();
+        if(period>3) endGame();
+    }
+
+    requestAnimationFrame(gameLoop);
+}
+
+// ===== START GAME =====
+generateSeasonSchedule();
+loadNextGame();
+gameLoop();
+</script>
+</body>
+</html>
